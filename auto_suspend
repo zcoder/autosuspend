@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+Auto-suspend daemon with periodic status logging.
+
+Suspends the host when system load stays below LOAD_THRESHOLD
+for longer than TIMEOUT_SEC.  The timer resets on
+  • load ≥ threshold
+  • reception of a WoL magic packet on UDP/9.
+Root privileges required (systemctl suspend, bind :9).
+"""
+import asyncio
+import logging
+import socket
+import subprocess
+import time
+from typing import Optional
+
+import psutil          # pip install psutil
+
+# ── Tuning ─────────────────────────────────────────────────────────────────────
+LOAD_THRESHOLD = 1.50        # «низкий» LA
+TIMEOUT_SEC    = 3 * 60 * 60 # 3 ч
+CHECK_PERIOD   = 30          # опрос нагрузки: 0.5 мин
+LOG_PERIOD     = 30          # вывод статуса:  0.5 мин
+WOL_PORT       = 9
+# ──────────────────────────────────────────────────────────────────────────────
+
+low_load_start: Optional[float] = None           # timestamp or None
+
+# ── Logging setup ──────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S")
+log = logging.getLogger(__name__)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def is_magic_packet(pkt: bytes) -> bool:
+    """True ⟺ WoL magic packet (FF*6 + 16×MAC)."""
+    return len(pkt) >= 102 and pkt.startswith(b'\xff' * 6) and \
+           all(pkt[6:12] == pkt[i:i + 6] for i in range(12, 102, 6))
+
+
+async def listen_wol():
+    """Resets timer on every valid WoL packet."""
+    global low_load_start
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', WOL_PORT))
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setblocking(False)
+    loop = asyncio.get_running_loop()
+
+    log.info("Listening for WoL packets on UDP/%d", WOL_PORT)
+    while True:
+        pkt = await loop.sock_recv(sock, 1024)
+        if is_magic_packet(pkt):
+            low_load_start = None
+            log.info("Magic packet received – timer reset")
+
+
+async def monitor_load():
+    """Checks load average and suspends when threshold exceeded."""
+    global low_load_start
+    while True:
+        la1, la5, la15 = psutil.getloadavg()
+        if all(x < LOAD_THRESHOLD for x in (la15,)):
+            if low_load_start is None:
+                low_load_start = time.time()
+                log.debug("Low load detected; countdown started")
+            elif time.time() - low_load_start >= TIMEOUT_SEC:
+                log.warning("Low load persisted %.0f s → suspending",
+                            TIMEOUT_SEC)
+                subprocess.run(['systemctl', 'suspend'])
+                low_load_start = None        # после resume начинаем заново
+        else:
+            if low_load_start is not None:
+                log.debug("Load rose above threshold – countdown cancelled")
+            low_load_start = None
+        await asyncio.sleep(CHECK_PERIOD)
+
+
+async def periodic_status():
+    """Writes current state to log every LOG_PERIOD seconds."""
+    while True:
+        la1, la5, la15 = psutil.getloadavg()
+        remaining = (TIMEOUT_SEC - (time.time() - low_load_start)
+                     if low_load_start else None)
+        log.info("LA: 1m=%.2f 5m=%.2f 15m=%.2f | suspend in: %s",
+                 la1, la5, la15,
+                 f"{int(remaining)} s" if remaining is not None else "—")
+        await asyncio.sleep(LOG_PERIOD)
+
+
+async def main():
+    await asyncio.gather(
+        listen_wol(),
+        monitor_load(),
+        periodic_status(),
+    )
+
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Terminated by user")
+

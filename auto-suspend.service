@@ -1,0 +1,16 @@
+[Unit]
+Description=Auto suspend on low load
+After=network.target
+# перезапускаем и после resume
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/auto_suspend
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target suspend.target
+

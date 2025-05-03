@@ -19,10 +19,11 @@ import psutil          # pip install psutil
 
 # ── Tuning ─────────────────────────────────────────────────────────────────────
 LOAD_THRESHOLD = 1.50        # «низкий» LA
-TIMEOUT_SEC    = 3 * 60 * 60 # 3 ч
+TIMEOUT_SEC    = 1 * 60 * 60 # 1 ч
 CHECK_PERIOD   = 30          # опрос нагрузки: 0.5 мин
 LOG_PERIOD     = 30          # вывод статуса:  0.5 мин
-WOL_PORT       = 9
+WOL_PORT       = 9           # сбросить таймер сна
+WOL_PORT_SLEEP = 11          # принудительно усыпить при получении пакета на этот порт
 # ──────────────────────────────────────────────────────────────────────────────
 
 low_load_start: Optional[float] = None           # timestamp or None
@@ -57,6 +58,23 @@ async def listen_wol():
         if is_magic_packet(pkt):
             low_load_start = None
             log.info("Magic packet received – timer reset")
+
+
+async def listen_wol_sleep():
+    """Force sleep on every valid WoL packet to port 11."""
+    global low_load_start
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', WOL_PORT_SLEEP))
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setblocking(False)
+    loop = asyncio.get_running_loop()
+
+    log.info("Listening for WoL packets (to force sleep) on UDP/%d", WOL_PORT_SLEEP)
+    while True:
+        pkt = await loop.sock_recv(sock, 1024)
+        if is_magic_packet(pkt):
+            low_load_start = 0
+            log.info("Magic packet received – force sleep")
 
 
 async def monitor_load():
@@ -95,6 +113,7 @@ async def periodic_status():
 async def main():
     await asyncio.gather(
         listen_wol(),
+        listen_wol_sleep(),
         monitor_load(),
         periodic_status(),
     )

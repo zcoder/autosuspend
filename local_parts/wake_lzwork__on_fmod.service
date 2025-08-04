@@ -1,0 +1,9 @@
+[Unit]
+Description=Run wrapper__wake_lzwork when changes in trend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/zhenka/junk/
+ExecStart=/home/zhenka/bin/wrapper__wake_lzwork

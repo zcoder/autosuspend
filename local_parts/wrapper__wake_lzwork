@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if find . -type f \( -name '*.py' -o -name '*.ipynb' \) -mmin -1 | grep -q .; then
+    exec /home/zhenka/bin/wake_lzwork
+fi
+

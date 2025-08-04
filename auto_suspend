@@ -82,7 +82,7 @@ async def monitor_load():
     global low_load_start
     while True:
         la1, la5, la15 = psutil.getloadavg()
-        if all(x < LOAD_THRESHOLD for x in (la15,)):
+        if all(x < LOAD_THRESHOLD for x in (la5, la15,)):
             if low_load_start is None:
                 low_load_start = time.time()
                 log.debug("Low load detected; countdown started")
